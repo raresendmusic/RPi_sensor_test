@@ -2,14 +2,16 @@ from smbus2 import SMBus
 from time import sleep
 
 I2C_ADDR = 0x39
+MAX_RAW = 65535.0
 
 def read_channel(bus, lsb_reg):
 	lsb = bus.read_byte_data(I2C_ADDR, lsb_reg)
-	msb = bus.read_byte_data(I2C_ADDR, lsb_reg + 0x10)
-	return (msb << 8) | lsb
+	msb = bus.read_byte_data(I2C_ADDR, lsb_reg + 1)
+	raw_value = (msb << 8) | lsb
+	return round((raw_value / MAX_RAW)*10, 2)
 
 with SMBus(1) as bus:
-	bus.write_byte_data(I2C_ADDR, 0x80, 0x01)
+	bus.write_byte_data(I2C_ADDR, 0x80, 0x03)
 	bus.write_byte_data(I2C_ADDR, 0x81, 0x01)
 	bus.write_byte_data(I2C_ADDR, 0x83, 0xF6)
 	bus.write_byte_data(I2C_ADDR, 0x8F, 0x01)
@@ -26,7 +28,10 @@ with SMBus(1) as bus:
 			print("Sensor value 590mm:", read_channel(bus, 0x9A))
 			print("Sensor value 630mm:", read_channel(bus, 0x9B))
 			print("Sensor value 680mm:", read_channel(bus, 0x9C))
-			sleep(1)
+			
+			print("Sensor value Clear:", read_channel(bus, 0x9D))
+			print("Sensor value NIR: ", read_channel(bus, 0x9F))
+			sleep(3)
 			
 	except Exception as e:
 		print("Error:", e)
