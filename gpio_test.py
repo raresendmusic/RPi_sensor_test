@@ -9,6 +9,10 @@ def read_channel(bus, lsb_reg):
 	msb = bus.read_byte_data(I2C_ADDR, lsb_reg + 1)
 	raw_value = (msb << 8) | lsb
 	return round((raw_value / MAX_RAW)*10, 2)
+	
+def calculate_ndvi(nir, red):
+	ndvi = (nir - red) / (nir + red)
+	return ndvi
 
 with SMBus(1) as bus:
 	bus.write_byte_data(I2C_ADDR, 0x80, 0x03)
@@ -31,6 +35,8 @@ with SMBus(1) as bus:
 			
 			print("Sensor value Clear:", read_channel(bus, 0x9D))
 			print("Sensor value NIR: ", read_channel(bus, 0x9F))
+			
+			print("NDVI: ", calculate_ndvi(read_channel(bus, 0x9F), read_channel(bus, 0x9B)))
 			sleep(3)
 			
 	except Exception as e:
