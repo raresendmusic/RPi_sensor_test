@@ -1,4 +1,3 @@
-
 from flask import Flask, request, render_template_string, redirect, url_for
 import os
 import subprocess 
@@ -7,8 +6,27 @@ import threading
 import cv2
 import numpy as np
 import re
+import sqlite3
 
 app = Flask(__name__)
+
+DB_NAME = "plant_monitor.db"
+
+def init_db():
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS plant_images (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                camera_id INTEGER,
+                file_size_kb REAL,
+                file_path TEXT NOT NULL,
+                ndvi_value REAL
+            )
+        ''')
+        conn.commit()
+init_db()
 
 # Set up folders
 os.makedirs('static', exist_ok=True)
@@ -22,7 +40,7 @@ NDVI_PATH_1 = "static/cam1_ndvi.jpg"
 NDVI_PATH_2 = "static/cam2_ndvi.jpg"
 
 script_output = None  
-sensor_ndvi = None    # New variable to hold just the NDVI number
+sensor_ndvi = None   
 capture_interval = 0  
 last_capture_time = 0
 
@@ -97,6 +115,10 @@ HTML_TEMPLATE = """
                 <button type="submit" class="btn-teal">CALCULATE NDVI (BOTH)</button>
             </form>
             
+            <form action="/database" method="GET" style="margin: 0;">
+                <button type="submit" class="btn-blue" style="background-color: #6f42c1;">VIEW DATABASE</button>
+            </form>
+            
             {% if sensor_ndvi %}
             <div class="sensor-display">
                 Sensor NDVI: {{ sensor_ndvi }}
@@ -118,12 +140,12 @@ HTML_TEMPLATE = """
             <div class="image-container">
                 <div class="image-box">
                     <h3>Original</h3>
-                    <img src="{{ url_for('static', filename='cam1_image.jpg') }}?v={{ timestamp }}" alt="Cam 1 Photo">
+                    <img src="{{ url_for('static', filename=cam1_filename) }}?v={{ timestamp }}" alt="Cam 1 Photo">
                 </div>
                 {% if ndvi1_exists %}
                 <div class="image-box">
                     <h3>NDVI Output</h3>
-                    <img src="{{ url_for('static', filename='cam1_ndvi.jpg') }}?v={{ timestamp }}" alt="Cam 1 NDVI">
+                    <img src="{{ url_for('static', filename=cam2_filename) }}?v={{ timestamp }}" alt="Cam 1 NDVI">
                 </div>
                 {% endif %}
             </div>
@@ -156,14 +178,137 @@ HTML_TEMPLATE = """
 </html>
 """
 
+DATABASE_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Database - PlantPi</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 30px; background-color: #f4f4f9; }
+        .btn-blue { background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 20px;}
+        .btn-blue:hover { background-color: #0056b3; }
+        .btn-green { background-color: #28a745; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; font-weight: bold; }
+        .btn-green:hover { background-color: #218838; }
+        table { width: 90%; margin: 0 auto; border-collapse: collapse; background: white; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+        th, td { padding: 12px; border: 1px solid #ddd; text-align: center; }
+        th { background-color: #343a40; color: white; }
+        tr:nth-child(even) { background-color: #f2f2f2; }
+        tr:hover { background-color: #e9ecef; }
+    </style>
+</head>
+<body>
+    <h1>PlantPi Database Records</h1>
+    <a href="/" class="btn-blue">&larr; Back to Live Cameras</a>
+    
+    <table>
+        <tr>
+            <th>ID</th>
+            <th>Date / Time</th>
+            <th>Camera</th>
+            <th>Size (KB)</th>
+            <th>NDVI</th>
+            <th>Action</th>
+        </tr>
+        {% for row in rows %}
+        <tr>
+            <td>{{ row['id'] }}</td>
+            <td>{{ row['timestamp'] }}</td>
+            <td>Cam {{ row['camera_id'] }}</td>
+            <td>{{ "%.1f"|format(row['file_size_kb']) }}</td>
+            <td>{{ row['ndvi_value'] if row['ndvi_value'] != None else 'N/A' }}</td>
+            <td><a href="/view/{{ row['id'] }}" class="btn-green">View Photo</a></td>
+        </tr>
+        {% endfor %}
+    </table>
+</body>
+</html>
+"""
+
+VIEW_PHOTO_TEMPLATE = """
+<!DOCTYPE html>
+<html>
+<head>
+    <title>View Photo #{{ row['id'] }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 30px; background-color: #f4f4f9; }
+        .btn-blue { background-color: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block; margin-bottom: 20px;}
+        .btn-blue:hover { background-color: #0056b3; }
+        .info-box { background: white; padding: 15px; border-radius: 8px; display: inline-block; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        img { max-width: 90%; border: 4px solid #ddd; border-radius: 10px; box-shadow: 0 4px 8px rgba(0,0,0,0.2); }
+    </style>
+</head>
+<body>
+    <h1>Viewing Record #{{ row['id'] }}</h1>
+    <a href="/database" class="btn-blue">&larr; Back to Database</a>
+    
+    <br>
+    <div class="info-box">
+        <strong>Time:</strong> {{ row['timestamp'] }} &nbsp;|&nbsp; 
+        <strong>Camera:</strong> {{ row['camera_id'] }} &nbsp;|&nbsp; 
+        <strong>NDVI:</strong> {{ row['ndvi_value'] if row['ndvi_value'] != None else 'N/A' }}
+    </div>
+    <br>
+    
+    <img src="/{{ row['file_path'] }}" alt="Plant Photo">
+</body>
+</html>
+"""
+
 def perform_capture():
     global script_output, sensor_ndvi
     
-    # Capture from Camera 0
-    subprocess.run(["rpicam-still", "--camera", "0", "-o", PHOTO_PATH_1, "-n", "--immediate"])
+    ts = time.strftime("%Y%m%d_%H%M%S")
+
+    cam1_path = f"static/cam1_{ts}.jpg"
+    cam2_path = f"static/cam2_{ts}.jpg"
+    subprocess.run(["rpicam-still", "--camera", "0", "-o", cam1_path, "-n", "--immediate"])
+    subprocess.run(["rpicam-still", "--camera", "1", "-o", cam2_path, "-n", "--immediate"])
     
-    # Capture from Camera 1
-    subprocess.run(["rpicam-still", "--camera", "1", "-o", PHOTO_PATH_2, "-n", "--immediate"])
+    # 3. Get NDVI value from sensor script
+    try:
+        result = subprocess.run(["python3", "../Plantpi/gpio_test.py"], capture_output=True, text=True, timeout=10)
+        script_output = result.stdout
+        match = re.search(r'NDVI:\s*([0-9.-]+)', script_output)
+        if match:
+            sensor_ndvi = match.group(1)
+        else:
+            sensor_ndvi = "N/A"
+    except subprocess.TimeoutExpired:
+        script_output = "Error: Sensor script took too long."
+        sensor_ndvi = "Error"
+    except Exception as e:
+        script_output = f"Error running script: {e}"
+        sensor_ndvi = "Error"
+
+    # 4. Parse NDVI for the database (convert to float, or None if invalid)
+    db_ndvi = None
+    try:
+        # Check if we have a valid number string to convert
+        if sensor_ndvi and sensor_ndvi not in ("N/A", "Error"):
+            db_ndvi = float(sensor_ndvi)
+    except ValueError:
+        db_ndvi = None # Will be saved as NULL in SQLite
+
+    # 5. Log everything into the SQLite database
+    with sqlite3.connect(DB_NAME) as conn:
+        cursor = conn.cursor()
+        
+        if os.path.exists(cam1_path):
+            size1_kb = os.path.getsize(cam1_path) / 1024.0
+            cursor.execute('''INSERT INTO plant_images 
+                              (camera_id, file_size_kb, file_path, ndvi_value) 
+                              VALUES (?, ?, ?, ?)''', 
+                           (1, size1_kb, cam1_path, db_ndvi))
+            
+        if os.path.exists(cam2_path):
+            size2_kb = os.path.getsize(cam2_path) / 1024.0
+            cursor.execute('''INSERT INTO plant_images 
+                              (camera_id, file_size_kb, file_path, ndvi_value) 
+                              VALUES (?, ?, ?, ?)''', 
+                           (2, size2_kb, cam2_path, db_ndvi))
+        conn.commit()
     
     try:
         # Added a 10-second timeout as a safety net just in case the sensor script hangs
@@ -198,8 +343,31 @@ threading.Thread(target=background_capture_loop, daemon=True).start()
 
 @app.route("/")
 def index():
-    cam1_exists = os.path.exists(PHOTO_PATH_1)
-    cam2_exists = os.path.exists(PHOTO_PATH_2)
+    cam1_filename = ""
+    cam2_filename = ""
+    
+    # 1. Ask the database for the newest photos
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        # Get newest Cam 1 photo
+        cursor.execute("SELECT file_path FROM plant_images WHERE camera_id = 1 ORDER BY timestamp DESC LIMIT 1")
+        row1 = cursor.fetchone()
+        if row1: 
+            # We strip 'static/' from the front because url_for('static', ...) adds it automatically
+            cam1_filename = row1['file_path'].replace('static/', '')
+            
+        # Get newest Cam 2 photo
+        cursor.execute("SELECT file_path FROM plant_images WHERE camera_id = 2 ORDER BY timestamp DESC LIMIT 1")
+        row2 = cursor.fetchone()
+        if row2: 
+            cam2_filename = row2['file_path'].replace('static/', '')
+
+    # 2. Verify the files actually exist on the SD card
+    cam1_exists = bool(cam1_filename and os.path.exists(f"static/{cam1_filename}"))
+    cam2_exists = bool(cam2_filename and os.path.exists(f"static/{cam2_filename}"))
+    
     ndvi1_exists = os.path.exists(NDVI_PATH_1)
     ndvi2_exists = os.path.exists(NDVI_PATH_2)
     timestamp = int(time.time())
@@ -208,6 +376,8 @@ def index():
         HTML_TEMPLATE, 
         cam1_exists=cam1_exists, 
         cam2_exists=cam2_exists,
+        cam1_filename=cam1_filename,  # Passing the dynamic name to HTML
+        cam2_filename=cam2_filename,  # Passing the dynamic name to HTML
         ndvi1_exists=ndvi1_exists,
         ndvi2_exists=ndvi2_exists,
         timestamp=timestamp, 
@@ -215,6 +385,7 @@ def index():
         sensor_ndvi=sensor_ndvi,
         current_interval=capture_interval
     )
+
 
 @app.route("/set_interval", methods=["POST"])
 def set_interval():
@@ -268,6 +439,32 @@ def upload_file():
     filepath = os.path.join(UPLOAD_FOLDER, file.filename)
     file.save(filepath)
     return f"Successfully uploaded {file.filename}!", 200
+    
+@app.route("/database", methods=["GET"])
+def database_view():
+    with sqlite3.connect(DB_NAME) as conn:
+        # This allows us to access columns by name in the HTML template
+        conn.row_factory = sqlite3.Row 
+        cursor = conn.cursor()
+        # Fetch all records, newest first
+        cursor.execute("SELECT * FROM plant_images ORDER BY timestamp DESC")
+        rows = cursor.fetchall()
+        
+    return render_template_string(DATABASE_TEMPLATE, rows=rows)
+
+@app.route("/view/<int:image_id>", methods=["GET"])
+def view_single_photo(image_id):
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        # Fetch just the specific row the user clicked on
+        cursor.execute("SELECT * FROM plant_images WHERE id = ?", (image_id,))
+        row = cursor.fetchone()
+        
+    if row is None:
+        return "Error: Image record not found in database.", 404
+        
+    return render_template_string(VIEW_PHOTO_TEMPLATE, row=row)    
     
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
