@@ -145,7 +145,7 @@ HTML_TEMPLATE = """
                 {% if ndvi1_exists %}
                 <div class="image-box">
                     <h3>NDVI Output</h3>
-                    <img src="{{ url_for('static', filename=cam2_filename) }}?v={{ timestamp }}" alt="Cam 1 NDVI">
+                    <img src="{{ url_for('static', filename='cam1_ndvi.jpg') }}?v={{ timestamp }}" alt="Cam 1 NDVI">
                 </div>
                 {% endif %}
             </div>
@@ -160,7 +160,7 @@ HTML_TEMPLATE = """
             <div class="image-container">
                 <div class="image-box">
                     <h3>Original</h3>
-                    <img src="{{ url_for('static', filename='cam2_image.jpg') }}?v={{ timestamp }}" alt="Cam 2 Photo">
+                    <img src="{{ url_for('static', filename=cam2_filename) }}?v={{ timestamp }}" alt="Cam 2 Photo">
                 </div>
                 {% if ndvi2_exists %}
                 <div class="image-box">
@@ -263,12 +263,12 @@ def perform_capture():
 
     cam1_path = f"static/cam1_{ts}.jpg"
     cam2_path = f"static/cam2_{ts}.jpg"
-    subprocess.run(["rpicam-still", "--camera", "0", "-o", cam1_path, "-n", "--immediate"])
-    subprocess.run(["rpicam-still", "--camera", "1", "-o", cam2_path, "-n", "--immediate"])
+    subprocess.run(["rpicam-still", "--camera", "0", "-o", cam1_path, "-n", "-t", "1000"])
+    subprocess.run(["rpicam-still", "--camera", "1", "-o", cam2_path, "-n", "-t", "1000"])
     
     # 3. Get NDVI value from sensor script
     try:
-        result = subprocess.run(["python3", "../Plantpi/gpio_test.py"], capture_output=True, text=True, timeout=10)
+        result = subprocess.run(["python3", "/home/plantpi/Plantpi/gpio_test.py"], capture_output=True, text=True, timeout=10)
         script_output = result.stdout
         match = re.search(r'NDVI:\s*([0-9.-]+)', script_output)
         if match:
@@ -425,8 +425,20 @@ def process_ndvi(input_path, output_path):
 
 @app.route("/generate_ndvi", methods=["POST"])
 def generate_ndvi():
-    process_ndvi(PHOTO_PATH_1, NDVI_PATH_1)
-    process_ndvi(PHOTO_PATH_2, NDVI_PATH_2)
+    with sqlite3.connect(DB_NAME) as conn:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT file_path FROM plant_images WHERE camera_id = 1 ORDER BY timestamp DESC LIMIT 1")
+        row1 = cursor.fetchone()
+        if row1:
+            process_ndvi(row1['file_path'], NDVI_PATH_1)
+
+        cursor.execute("SELECT file_path FROM plant_images WHERE camera_id = 2 ORDER BY timestamp DESC LIMIT 1")
+        row2 = cursor.fetchone()
+        if row2:
+            process_ndvi(row2['file_path'], NDVI_PATH_2)
+            
     return redirect(url_for('index'))
     
 @app.route("/upload", methods=["POST"])
